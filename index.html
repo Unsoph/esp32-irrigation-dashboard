@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Smart Irrigation Dashboard</title>
+<script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg:        #08090a;
+    --surface:   #111214;
+    --panel:     #16181b;
+    --border:    #232529;
+    --border2:   #2e3035;
+    --accent:    #00d4ff;
+    --accent2:   #0099bb;
+    --green:     #00e676;
+    --green-dim: #003d1e;
+    --red:       #ff3d5a;
+    --red-dim:   #3d0011;
+    --yellow:    #ffcc02;
+    --yellow-dim:#3d3000;
+    --orange:    #ff6b2b;
+    --text:      #e8eaed;
+    --muted:     #6b7280;
+    --muted2:    #9ca3af;
+    --mono:      'JetBrains Mono', monospace;
+    --display:   'Syne', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    min-height: 100vh;
+    padding: 20px 16px 40px;
+    background-image:
+      radial-gradient(ellipse 600px 400px at 80% 10%, rgba(0,212,255,0.04) 0%, transparent 60%),
+      radial-gradient(ellipse 400px 300px at 10% 80%, rgba(0,230,118,0.03) 0%, transparent 60%);
+  }
+
+  /* ── HEADER ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .logo-icon {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, var(--accent), var(--green));
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+  .logo h1 {
+    font-family: var(--display);
+    font-size: 1.1rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: var(--text);
+    line-height: 1;
+  }
+  .logo h1 span { color: var(--accent); }
+  .logo small {
+    display: block;
+    font-size: .62rem;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-weight: 400;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    margin-top: 2px;
+  }
+
+  /* MQTT Status */
+  .mqtt-status {
+    display: flex; align-items: center; gap: 8px;
+    font-size: .72rem; color: var(--muted2);
+  }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+    transition: background .3s, box-shadow .3s;
+  }
+  .dot.connected { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.connecting { background: var(--yellow); animation: blink .8s infinite; }
+  .dot.error { background: var(--red); }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  /* ── GRID ── */
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto;
+    gap: 14px;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  @media (max-width: 720px) {
+    .main-grid { grid-template-columns: 1fr; }
+    .span2 { grid-column: span 1 !important; }
+  }
+
+  .span2 { grid-column: span 2; }
+
+  /* ── CARDS ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+  }
+  .card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border2), transparent);
+  }
+  .card-label {
+    font-size: .65rem;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    color: var(--muted);
+    margin-bottom: 14px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .card-label .dot-sm {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--accent);
+  }
+
+  /* ── WATER LEVEL GAUGE ── */
+  .gauge-wrap {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+  .gauge-svg-wrap {
+    flex-shrink: 0;
+    position: relative;
+  }
+  #gaugeDroplets {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -56%);
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+    line-height: 1.3;
+    pointer-events: none;
+  }
+  #gaugeDroplets .big-num {
+    display: block;
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1;
+  }
+  #gaugeDroplets .sub {
+    font-size: .62rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  #gaugeDroplets .dist-val {
+    font-size: .68rem;
+    color: var(--accent);
+    margin-top: 3px;
+  }
+
+  .gauge-meta { flex: 1; }
+  .gauge-stat {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: .75rem;
+  }
+  .gauge-stat:last-child { border-bottom: none; }
+  .gauge-stat-label { color: var(--muted); }
+  .gauge-stat-val { font-weight: 600; color: var(--text); }
+  .gauge-stat-val.green { color: var(--green); }
+  .gauge-stat-val.red   { color: var(--red); }
+  .gauge-stat-val.yellow{ color: var(--yellow); }
+  .gauge-stat-val.blue  { color: var(--accent); }
+
+  /* ── HISTORY CHART ── */
+  .chart-wrap {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    height: 120px;
+    position: relative;
+  }
+  .chart-title {
+    font-size: .62rem;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+
+  /* ── SOIL MOISTURE ── */
+  .moisture-big {
+    font-family: var(--display);
+    font-size: 3.2rem;
+    font-weight: 800;
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+  .moisture-bar-wrap {
+    background: var(--panel);
+    border-radius: 6px;
+    height: 14px;
+    overflow: hidden;
+    margin: 12px 0 8px;
+    border: 1px solid var(--border);
+  }
+  .moisture-bar {
+    height: 100%;
+    border-radius: 6px;
+    transition: width .6s ease;
+    background: linear-gradient(90deg, #1a6b35, var(--green));
+  }
+  .moisture-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: .62rem;
+    color: var(--muted);
+  }
+
+  /* ── SYSTEM STATE ── */
+  .state-display {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .state-chip {
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: .78rem;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    transition: all .3s;
+  }
+  .chip-IDLE       { background: #1c1d1f; color: var(--muted2); border: 1px solid var(--border2); }
+  .chip-FILLING    { background: #0a2540; color: #7dd3fc; border: 1px solid #0e3d66; }
+  .chip-READY      { background: var(--green-dim); color: var(--green); border: 1px solid #00663a; }
+  .chip-IRRIGATING { background: #0a3320; color: #6ee7b7; border: 1px solid #0d5c3a; }
+  .chip-FAULT      { background: var(--red-dim); color: var(--red); border: 1px solid #880022; animation: pulse-red 1s infinite; }
+  @keyframes pulse-red { 0%,100%{box-shadow:0 0 0 0 rgba(255,61,90,.4)} 50%{box-shadow:0 0 0 5px rgba(255,61,90,0)} }
+
+  .pump-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: .75rem;
+  }
+  .pump-row:last-of-type { border-bottom: none; }
+  .pump-label { color: var(--muted2); }
+  .pump-badge {
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: .68rem;
+    font-weight: 700;
+    transition: all .3s;
+  }
+  .badge-ON  { background: var(--green-dim); color: var(--green); border: 1px solid #00663a; }
+  .badge-OFF { background: #1a1b1e; color: var(--muted); border: 1px solid var(--border); }
+
+  /* ── MOTOR CONTROL ── */
+  .motor-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 4px;
+  }
+  .motor-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+  }
+  .motor-card-title {
+    font-size: .68rem;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .motor-card-status {
+    font-size: 1.4rem;
+    font-weight: 700;
+    margin-bottom: 10px;
+    transition: color .3s;
+  }
+  .motor-card-status.on  { color: var(--green); }
+  .motor-card-status.off { color: var(--muted); }
+
+  .btn-group { display: flex; gap: 6px; }
+  .btn {
+    flex: 1;
+    padding: 9px 6px;
+    border: none;
+    border-radius: 7px;
+    font-family: var(--mono);
+    font-size: .72rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all .15s;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .btn:active { transform: scale(.96); }
+  .btn:disabled { opacity: .35; cursor: not-allowed; }
+
+  .btn-start {
+    background: var(--green-dim);
+    color: var(--green);
+    border: 1px solid #004d22;
+  }
+  .btn-start:not(:disabled):hover { background: #004d22; }
+
+  .btn-stop {
+    background: var(--red-dim);
+    color: var(--red);
+    border: 1px solid #660015;
+  }
+  .btn-stop:not(:disabled):hover { background: #660015; }
+
+  .btn-mode {
+    width: 100%;
+    padding: 11px;
+    background: #0a1a3d;
+    color: #7dd3fc;
+    border: 1px solid #1a4080;
+    border-radius: 8px;
+    font-size: .75rem;
+    margin-top: 12px;
+    font-family: var(--mono);
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    transition: all .15s;
+  }
+  .btn-mode:hover { background: #1a4080; }
+  .btn-mode.manual-active {
+    background: #2d1a00;
+    color: var(--yellow);
+    border-color: #7a4800;
+  }
+
+  .btn-clear-fault {
+    width: 100%;
+    padding: 10px;
+    background: var(--red-dim);
+    color: var(--red);
+    border: 1px solid #880022;
+    border-radius: 8px;
+    font-size: .75rem;
+    margin-top: 8px;
+    font-family: var(--mono);
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    transition: all .15s;
+    display: none;
+  }
+  .btn-clear-fault:hover { background: #880022; }
+
+  /* ── FAULT BOX ── */
+  .fault-banner {
+    background: var(--red-dim);
+    border: 1px solid #880022;
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 14px;
+    font-size: .8rem;
+    color: var(--red);
+    display: none;
+    align-items: center;
+    gap: 10px;
+  }
+  .fault-banner.visible { display: flex; }
+  .fault-icon { font-size: 1.2rem; flex-shrink: 0; }
+
+  /* ── FOOTER ── */
+  footer {
+    margin-top: 20px;
+    text-align: center;
+    font-size: .65rem;
+    color: var(--muted);
+    letter-spacing: .05em;
+  }
+  footer span { color: var(--accent); }
+
+  /* ── MODE NOTICE ── */
+  .mode-notice {
+    font-size: .68rem;
+    color: var(--muted);
+    margin-bottom: 10px;
+    padding: 7px 10px;
+    background: var(--panel);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  .mode-notice.manual { color: var(--yellow); border-color: #7a4800; background: #1a1000; }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">💧</div>
+    <div>
+      <h1>Smart<span>Irrigate</span></h1>
+      <small>ritwik/data · MQTT Live</small>
+    </div>
+  </div>
+  <div class="mqtt-status">
+    <div class="dot connecting" id="mqttDot"></div>
+    <span id="mqttLabel">Connecting…</span>
+  </div>
+</header>
+
+<!-- Fault Banner -->
+<div class="fault-banner" id="faultBanner">
+  <span class="fault-icon">⚠️</span>
+  <div>
+    <strong>FAULT DETECTED —</strong>
+    <span id="faultMsg"></span>
+    <br/><small>Switch to Manual mode and use Clear Fault to reset the system.</small>
+  </div>
+</div>
+
+<div class="main-grid">
+
+  <!-- ── WATER LEVEL GAUGE ── -->
+  <div class="card">
+    <div class="card-label"><span class="dot-sm"></span>Main Tank — Water Level</div>
+    <div class="gauge-wrap">
+
+      <!-- SVG Gauge -->
+      <div class="gauge-svg-wrap">
+        <svg width="180" height="160" viewBox="0 0 180 160">
+          <!-- Background arc (270° sweep, starts at 225°, ends at 315° CW) -->
+          <circle cx="90" cy="90" r="70"
+            fill="none"
+            stroke="#1c1e22"
+            stroke-width="16"
+            stroke-dasharray="329.87 109.96"
+            stroke-dashoffset="-256.56"
+            stroke-linecap="round"/>
+          <!-- Fill arc -->
+          <circle id="gaugeFill" cx="90" cy="90" r="70"
+            fill="none"
+            stroke="var(--accent)"
+            stroke-width="16"
+            stroke-dasharray="0 439.82"
+            stroke-dashoffset="-256.56"
+            stroke-linecap="round"
+            style="transition:stroke-dasharray .6s ease,stroke .4s ease"/>
+          <!-- Threshold LOW marker dot -->
+          <circle id="markerLow" cx="90" cy="90" r="70"
+            fill="none" stroke="var(--yellow)" stroke-width="3"
+            stroke-dasharray="2 437.82"
+            stroke-dashoffset="-256.56"
+            opacity="0.8"/>
+        </svg>
+        <div id="gaugeDroplets">
+          <span class="big-num" id="gaugeNum">—</span>
+          <span class="sub">% full</span>
+          <span class="dist-val" id="gaugeDistLine">— cm</span>
+        </div>
+      </div>
+
+      <!-- Side stats -->
+      <div class="gauge-meta">
+        <div class="gauge-stat">
+          <span class="gauge-stat-label">Distance</span>
+          <span class="gauge-stat-val blue" id="statDist">— cm</span>
+        </div>
+        <div class="gauge-stat">
+          <span class="gauge-stat-label">Tank Status</span>
+          <span class="gauge-stat-val" id="statTankStatus">—</span>
+        </div>
+        <div class="gauge-stat">
+          <span class="gauge-stat-label">Pump 1</span>
+          <span class="gauge-stat-val" id="statP1">—</span>
+        </div>
+        <div class="gauge-stat">
+          <span class="gauge-stat-label">Low Threshold</span>
+          <span class="gauge-stat-val yellow" id="statLowPct">20%</span>
+        </div>
+        <div class="gauge-stat">
+          <span class="gauge-stat-label">Full Threshold</span>
+          <span class="gauge-stat-val green" id="statFullPct">90%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- History Chart -->
+    <div class="chart-wrap">
+      <div class="chart-title">▸ Water level history (last 60 readings)</div>
+      <canvas id="historyChart" style="height:90px"></canvas>
+    </div>
+  </div>
+
+  <!-- ── SOIL MOISTURE + SYSTEM STATE ── -->
+  <div class="card">
+    <div class="card-label"><span class="dot-sm" style="background:var(--green)"></span>Soil Moisture</div>
+    <div class="moisture-big" id="soilBig" style="color:var(--green)">—<span style="font-size:1.4rem;font-weight:400">%</span></div>
+    <div class="moisture-bar-wrap">
+      <div class="moisture-bar" id="soilBar" style="width:0%"></div>
+    </div>
+    <div class="moisture-labels">
+      <span>DRY</span>
+      <span id="soilStatus" style="color:var(--muted)">—</span>
+      <span>WET</span>
+    </div>
+
+    <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--border)">
+      <div class="card-label" style="margin-bottom:10px"><span class="dot-sm" style="background:var(--yellow)"></span>System State</div>
+      <div class="state-display">
+        <div class="state-chip chip-IDLE" id="stateChip">IDLE</div>
+        <div style="font-size:.72rem;color:var(--muted)" id="stateDesc">Waiting for sensor data</div>
+      </div>
+      <div class="pump-row">
+        <span class="pump-label">Pump 1 — Fill Motor</span>
+        <span class="pump-badge badge-OFF" id="p1Badge">OFF</span>
+      </div>
+      <div class="pump-row">
+        <span class="pump-label">Pump 2 — Irrigate</span>
+        <span class="pump-badge badge-OFF" id="p2Badge">OFF</span>
+      </div>
+      <div class="pump-row" style="border-bottom:none">
+        <span class="pump-label">Control Mode</span>
+        <span class="pump-badge badge-OFF" id="modeBadge">AUTO</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── MOTOR CONTROL ── -->
+  <div class="card span2">
+    <div class="card-label"><span class="dot-sm" style="background:var(--orange)"></span>Manual Motor Control</div>
+
+    <div class="mode-notice" id="modeNotice">
+      🔒 Auto mode active — switch to Manual to override pumps
+    </div>
+
+    <div class="motor-grid">
+      <!-- Pump 1 -->
+      <div class="motor-card">
+        <div class="motor-card-title">⚙ Motor 1 — Tank Fill Pump</div>
+        <div class="motor-card-status off" id="m1Status">● OFF</div>
+        <div class="btn-group">
+          <button class="btn btn-start" id="m1On"  onclick="pumpCmd(1,1)" disabled>▶ ON</button>
+          <button class="btn btn-stop"  id="m1Off" onclick="pumpCmd(1,0)" disabled>■ OFF</button>
+        </div>
+      </div>
+      <!-- Pump 2 -->
+      <div class="motor-card">
+        <div class="motor-card-title">💦 Motor 2 — Irrigation Pump</div>
+        <div class="motor-card-status off" id="m2Status">● OFF</div>
+        <div class="btn-group">
+          <button class="btn btn-start" id="m2On"  onclick="pumpCmd(2,1)" disabled>▶ ON</button>
+          <button class="btn btn-stop"  id="m2Off" onclick="pumpCmd(2,0)" disabled>■ OFF</button>
+        </div>
+      </div>
+    </div>
+
+    <button class="btn-mode" id="modeBtn" onclick="toggleMode()">
+      ⇄ Switch to Manual Mode
+    </button>
+    <button class="btn-clear-fault" id="clearFaultBtn" onclick="clearFault()">
+      ✕ Clear Fault &amp; Reset
+    </button>
+  </div>
+
+</div>
+
+<footer>
+  <div>Last update: <span id="lastUpdate">—</span> &nbsp;·&nbsp; Broker: <span>broker.hivemq.com</span> &nbsp;·&nbsp; Topic: <span>ritwik/data</span></div>
+</footer>
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  MQTT CONFIG
+// ═══════════════════════════════════════════════════════
+const BROKER_URL   = 'wss://broker.hivemq.com:8884/mqtt';
+const TOPIC_DATA   = 'ritwik/data';
+const TOPIC_CTRL   = 'ritwik/control';
+const CLIENT_ID    = 'web_ritwik_' + Math.random().toString(16).slice(2,8);
+
+// ═══════════════════════════════════════════════════════
+//  CHART — Water Level History
+// ═══════════════════════════════════════════════════════
+const MAX_HISTORY = 60;
+const histData    = Array(MAX_HISTORY).fill(null);
+const histLabels  = Array(MAX_HISTORY).fill('');
+
+const historyChart = new Chart(
+  document.getElementById('historyChart').getContext('2d'),
+  {
+    type: 'line',
+    data: {
+      labels: histLabels,
+      datasets: [{
+        data: histData,
+        borderColor: 'rgba(0,212,255,0.8)',
+        backgroundColor: 'rgba(0,212,255,0.07)',
+        fill: true,
+        tension: 0.4,
+        pointRadius: 0,
+        borderWidth: 2
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { intersect: false },
+      scales: {
+        y: {
+          min: 0, max: 100,
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: {
+            color: '#6b7280', font: { family: "'JetBrains Mono', monospace", size: 9 },
+            callback: v => v + '%', stepSize: 25
+          },
+          border: { color: 'transparent' }
+        },
+        x: { display: false }
+      },
+      plugins: { legend: { display: false }, tooltip: { enabled: false } }
+    }
+  }
+);
+
+function pushHistory(val) {
+  histData.push(val);
+  histData.shift();
+  historyChart.update('none');
+}
+
+// ═══════════════════════════════════════════════════════
+//  SVG GAUGE
+// ═══════════════════════════════════════════════════════
+const GAUGE_R = 70;
+const GAUGE_C = 2 * Math.PI * GAUGE_R;          // 439.82
+const SWEEP   = 0.75;                             // 270° / 360°
+const ARC_LEN = GAUGE_C * SWEEP;                 // 329.87
+const OFFSET  = -(210 / 360) * GAUGE_C;          // -256.56
+
+function setGauge(pct) {
+  pct = Math.max(0, Math.min(100, pct));
+  const fill = (pct / 100) * ARC_LEN;
+  const gap  = GAUGE_C - fill;
+  const el   = document.getElementById('gaugeFill');
+  el.setAttribute('stroke-dasharray', `${fill.toFixed(2)} ${gap.toFixed(2)}`);
+
+  let color = '#ff3d5a';
+  if (pct >= 80)      color = '#00d4ff';
+  else if (pct >= 50) color = '#00e676';
+  else if (pct >= 20) color = '#ffcc02';
+  el.setAttribute('stroke', color);
+
+  document.getElementById('gaugeNum').textContent = pct.toFixed(1) + '%';
+}
+
+// ═══════════════════════════════════════════════════════
+//  STATE DESCRIPTIONS
+// ═══════════════════════════════════════════════════════
+const STATE_DESC = {
+  IDLE:       'System idle — no action needed',
+  FILLING:    'Pump 1 ON — filling main tank',
+  READY:      'Tank full — awaiting dry soil',
+  IRRIGATING: 'Pump 2 ON — irrigating plants',
+  FAULT:      '⚠ Safety lockout triggered'
+};
+
+// ═══════════════════════════════════════════════════════
+//  UI UPDATE
+// ═══════════════════════════════════════════════════════
+let lastData = {};
+let isManual = false;
+
+function updateUI(d) {
+  lastData = d;
+
+  // ── Gauge ──
+  setGauge(d.waterLevel || 0);
+  const dist = (d.tankDistCm || 0).toFixed(1);
+  document.getElementById('gaugeDistLine').textContent = dist + ' cm';
+  document.getElementById('statDist').textContent      = dist + ' cm';
+
+  // Tank status label
+  const wl = d.waterLevel || 0;
+  const tsEl = document.getElementById('statTankStatus');
+  if (wl >= (d.tankFullPct || 90))      { tsEl.textContent = 'FULL';    tsEl.className = 'gauge-stat-val green'; }
+  else if (wl <= (d.tankLowPct || 20))  { tsEl.textContent = 'LOW';     tsEl.className = 'gauge-stat-val red'; }
+  else                                   { tsEl.textContent = 'OK';      tsEl.className = 'gauge-stat-val blue'; }
+
+  const p1El = document.getElementById('statP1');
+  p1El.textContent  = d.pump1 ? 'RUNNING' : 'STOPPED';
+  p1El.className    = 'gauge-stat-val ' + (d.pump1 ? 'green' : 'red');
+
+  if (d.tankLowPct !== undefined) {
+    document.getElementById('statLowPct').textContent  = d.tankLowPct  + '%';
+    document.getElementById('statFullPct').textContent = d.tankFullPct + '%';
+  }
+
+  // History
+  pushHistory(d.waterLevel || 0);
+
+  // ── Soil ──
+  const sm = d.soilMoisture || 0;
+  document.getElementById('soilBig').innerHTML =
+    sm.toFixed(1) + '<span style="font-size:1.4rem;font-weight:400">%</span>';
+  document.getElementById('soilBar').style.width = sm + '%';
+
+  let smColor = '#ff3d5a', smStatus = 'DRY — needs water';
+  if (sm >= 70)      { smColor = '#00d4ff'; smStatus = 'WET — no irrigation'; }
+  else if (sm >= 40) { smColor = '#00e676'; smStatus = 'MOIST — optimal'; }
+  document.getElementById('soilBig').style.color   = smColor;
+  document.getElementById('soilStatus').textContent = smStatus;
+  document.getElementById('soilStatus').style.color = smColor;
+
+  // ── State ──
+  const state    = d.state || 'IDLE';
+  const stateChip = document.getElementById('stateChip');
+  stateChip.textContent = state;
+  stateChip.className   = 'state-chip chip-' + state;
+  document.getElementById('stateDesc').textContent = STATE_DESC[state] || state;
+
+  // ── Pump badges ──
+  const p1b = document.getElementById('p1Badge');
+  p1b.textContent = d.pump1 ? 'ON' : 'OFF';
+  p1b.className   = 'pump-badge badge-' + (d.pump1 ? 'ON' : 'OFF');
+
+  const p2b = document.getElementById('p2Badge');
+  p2b.textContent = d.pump2 ? 'ON' : 'OFF';
+  p2b.className   = 'pump-badge badge-' + (d.pump2 ? 'ON' : 'OFF');
+
+  // ── Motor status cards ──
+  const m1s = document.getElementById('m1Status');
+  m1s.textContent = d.pump1 ? '● ON' : '● OFF';
+  m1s.className   = 'motor-card-status ' + (d.pump1 ? 'on' : 'off');
+
+  const m2s = document.getElementById('m2Status');
+  m2s.textContent = d.pump2 ? '● ON' : '● OFF';
+  m2s.className   = 'motor-card-status ' + (d.pump2 ? 'on' : 'off');
+
+  // ── Mode ──
+  isManual = !d.autoMode;
+  const mb = document.getElementById('modeBadge');
+  mb.textContent = isManual ? 'MANUAL' : 'AUTO';
+  mb.className   = 'pump-badge ' + (isManual ? 'badge-ON' : 'badge-OFF');
+  mb.style.color = isManual ? 'var(--yellow)' : '';
+
+  const modeBtn  = document.getElementById('modeBtn');
+  const modeNote = document.getElementById('modeNotice');
+  if (isManual) {
+    modeBtn.textContent  = '⇄ Switch to Auto Mode';
+    modeBtn.className    = 'btn-mode manual-active';
+    modeNote.textContent = '⚡ Manual mode — you control the pumps';
+    modeNote.className   = 'mode-notice manual';
+  } else {
+    modeBtn.textContent  = '⇄ Switch to Manual Mode';
+    modeBtn.className    = 'btn-mode';
+    modeNote.textContent = '🔒 Auto mode active — switch to Manual to override pumps';
+    modeNote.className   = 'mode-notice';
+  }
+
+  // Enable/disable pump buttons
+  ['m1On','m1Off','m2On','m2Off'].forEach(id => {
+    document.getElementById(id).disabled = !isManual || state === 'FAULT';
+  });
+
+  // ── Fault ──
+  const faultBanner = document.getElementById('faultBanner');
+  const clearBtn    = document.getElementById('clearFaultBtn');
+  if (state === 'FAULT') {
+    faultBanner.classList.add('visible');
+    document.getElementById('faultMsg').textContent = d.faultReason || 'Unknown fault';
+    clearBtn.style.display = 'block';
+  } else {
+    faultBanner.classList.remove('visible');
+    clearBtn.style.display = 'none';
+  }
+
+  // ── Timestamp ──
+  document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+}
+
+// ═══════════════════════════════════════════════════════
+//  MQTT
+// ═══════════════════════════════════════════════════════
+let mqttClient = null;
+
+function setMqttStatus(status, label) {
+  const dot = document.getElementById('mqttDot');
+  const lbl = document.getElementById('mqttLabel');
+  dot.className = 'dot ' + status;
+  lbl.textContent = label;
+}
+
+function connectMQTT() {
+  setMqttStatus('connecting', 'Connecting…');
+
+  mqttClient = mqtt.connect(BROKER_URL, {
+    clientId: CLIENT_ID,
+    clean: true,
+    reconnectPeriod: 3000,
+    connectTimeout: 10000,
+    keepalive: 30
+  });
+
+  mqttClient.on('connect', () => {
+    setMqttStatus('connected', 'Connected · HiveMQ');
+    mqttClient.subscribe(TOPIC_DATA, { qos: 0 }, (err) => {
+      if (err) console.error('Subscribe error:', err);
+      else console.log('[MQTT] Subscribed to', TOPIC_DATA);
+    });
+  });
+
+  mqttClient.on('message', (topic, payload) => {
+    if (topic !== TOPIC_DATA) return;
+    try {
+      const d = JSON.parse(payload.toString());
+      updateUI(d);
+    } catch(e) {
+      console.warn('[MQTT] Parse error:', e);
+    }
+  });
+
+  mqttClient.on('error', (err) => {
+    console.error('[MQTT] Error:', err);
+    setMqttStatus('error', 'Connection error');
+  });
+
+  mqttClient.on('close', () => {
+    setMqttStatus('connecting', 'Reconnecting…');
+  });
+
+  mqttClient.on('reconnect', () => {
+    setMqttStatus('connecting', 'Reconnecting…');
+  });
+}
+
+function publish(cmd) {
+  if (!mqttClient || !mqttClient.connected) {
+    alert('Not connected to MQTT broker');
+    return;
+  }
+  const msg = JSON.stringify({ cmd });
+  mqttClient.publish(TOPIC_CTRL, msg, { qos: 0 });
+  console.log('[MQTT] TX:', msg);
+}
+
+// ═══════════════════════════════════════════════════════
+//  CONTROLS
+// ═══════════════════════════════════════════════════════
+function pumpCmd(pump, state) {
+  if (!isManual) { alert('Switch to Manual mode first'); return; }
+  publish('pump' + pump + '_' + (state ? 'on' : 'off'));
+}
+
+function toggleMode() {
+  publish(isManual ? 'mode_auto' : 'mode_manual');
+}
+
+function clearFault() {
+  publish('clear_fault');
+}
+
+// ═══════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════
+connectMQTT();
+</script>
+</body>
+</html>
