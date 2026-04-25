@@ -9,7 +9,7 @@ GitHub Pages as well as a local web UI served directly from the ESP32.
 
 ## 🌐 Live Dashboard
 
-**[View Dashboard →](https://YOUR_USERNAME.github.io/esp32-irrigation-dashboard/)**
+**[View Dashboard →](https://unsoph.github.io/esp32-irrigation-dashboard/)**
 
 > Connects to the ESP32 via MQTT over WebSocket (HiveMQ public broker).  
 > No app or installation needed — works in any modern browser.
