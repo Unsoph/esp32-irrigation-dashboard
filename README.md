@@ -155,7 +155,8 @@ FAULT
 - **Fault clear** requires explicit `clear_fault` MQTT command or browser control
 - **Manual mode** stops all pumps immediately on activation
 - Pumps default to **OFF** on boot (active-LOW relays held HIGH)
-
+Eashan Jain
+Shreyas Sharma
 ---
 
 ## 📁 File Structure
